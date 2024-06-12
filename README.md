@@ -1,6 +1,6 @@
 # ADControl: Towards Diverse and Controllable 3D Human Motion Generation
  
-The official PyTorch implementation of the paper [**"ADControl: Towards Diverse and Controllable 3D Human Motion Generation"**](https://arxiv.org/abs/2209.14916).
+The official PyTorch implementation of the paper [**"ADControl: Towards Diverse and Controllable 3D Human Motion Generation"**].
 
 
 ![teaser](assets/posterbig.png)
