@@ -1,4 +1,5 @@
 dataset/HumanML3D/
+dataset/KIT-ML/
 output/
 checkpoints/
 utils/eval_utils.py
