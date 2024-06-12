@@ -6,3 +6,6 @@ utils/eval_utils.py
 eval_new.py
 eval_debug.py
 recoverML3D.py
+
+*.npy
+*.pkl
