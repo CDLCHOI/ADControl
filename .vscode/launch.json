@@ -1,0 +1,102 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "train_diffmae_omni67",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--exp_name", "trans_ttt",
+                    "--gpu", "4", 
+                    "--mode", "train",
+                    "--batch_size", "128",
+                    "--lr", "0.0001",
+                    "--modeltype", "omni67",
+                    "--overwrite",
+                    "--print_iter", "10",
+                    "--normalize_traj",
+                    "--multi_joint_control",
+                    "--resume_trans", "output/0518_omni67_multi_partxyz/net_last.pth"]
+        },
+        {
+            "name": "train_diffmae_2",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--exp_name", "trans_ttt",
+                    "--gpu", "0", 
+                    "--mode", "train",
+                    "--batch_size", "64",
+                    "--lr", "0.0001",
+                    "--modeltype", "diffmae_stage2_2",
+                    "--num_layers_E", "3",
+                    "--num_layers_D", "0",
+                    "--overwrite",
+                    "--print_iter", "10",
+                    "--resume_trans", "None"]
+        },
+        {
+            "name": "train_mdm",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--exp_name", "trans_ttt",
+                    "--gpu", "0", 
+                    "--mode", "train",
+                    "--batch_size", "64",
+                    "--lr", "0.0001",
+                    "--modeltype", "diffmdm",
+                    "--num_layers_E", "3",
+                    "--num_layers_D", "0",
+                    "--overwrite",
+                    "--loss_type", "l2",
+                    "--print_iter", "10",
+                    "--resume_trans", "/home/deli/project/motion-diffusion-model/save/humanml_trans_enc_512/model000475000.pt"]
+        },
+        {
+            "name": "train_semboost",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--exp_name", "trans_ttt",
+                    "--gpu", "7", 
+                    "--mode", "train",
+                    "--batch_size", "1",
+                    "--lr", "0.0001",
+                    "--modeltype", "semboost",
+                    "--overwrite",
+                    "--loss_type", "l2",
+                    "--print_iter", "10",
+                    "--resume_trans", "output/0520_semboost/net_last.pth"]
+        },
+        {
+            "name": "generate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "generate.py",
+            "console": "integratedTerminal",
+            "args": ["--resume-pth", "pretrain/vqvae.pth",
+                    "--resume_trans", "pretrain/trans.pth",
+                    "--text", "the person crouches and walks forward.",
+                    "--length", "156"]
+        },
+    ]
+}

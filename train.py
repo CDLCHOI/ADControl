@@ -11,15 +11,11 @@ from torch.utils.tensorboard import SummaryWriter
 from os.path import join as pjoin
 import clip
 import json
-import utils.utils_model as utils_model
-import utils.eval_trans as eval_trans
+from utils.model_util import initial_optim, get_logger
+from utils.mask_utils import load_ckpt
 from dataset import dataset_control
-from options.get_eval_option import get_opt
-from models.evaluator_wrapper import EvaluatorModelWrapper
 import warnings
 warnings.filterwarnings('ignore')
-# from exit.utils import get_model, visualize_2motions, generate_src_mask, init_save_folder, uniform, cosine_schedule, gumbel_sample
-import torch.nn.functional as F
 import shutil
 
 if __name__ == '__main__':
@@ -31,7 +27,7 @@ if __name__ == '__main__':
     os.makedirs(args.out_dir, exist_ok = True)
 
     # logger
-    logger = utils_model.get_logger(args.out_dir)
+    logger = get_logger(args.out_dir)
     writer = SummaryWriter(args.out_dir)
     logger.info(json.dumps(vars(args), indent=4, sort_keys=True)) # args所有输出到log
     logger.info(args.note)
@@ -66,60 +62,37 @@ if __name__ == '__main__':
     # VA-VAE
     if args.modeltype == 'omni67':
         from models.omni67 import CMDM
-        net = CMDM(args, args.modeltype)
+        net = CMDM(args, args.modeltype, njoints=67 if args.dataset_name == 't2m' else 63)
     elif args.modeltype == 'semboost':
-        from models.semboost import MDM
-        from utils.semboost_utils import get_semboost_args
-        net = MDM(**get_semboost_args(args))
+        from models.semanticboost import SemanticBoost
+        from utils.model_util import get_semanticboost_args
+        net = SemanticBoost(**get_semanticboost_args(args))
     else:   
         raise ValueError("modeltype not found")
 
     from utils.model_util import create_gaussian_diffusion_simple
     diffusion = create_gaussian_diffusion_simple(args, net, args.modeltype, clip_model)
 
-    if args.resume_trans is not None and args.resume_trans != 'None':
-        ckpt = torch.load(args.resume_trans, map_location='cpu')
-        if 'module' in list(ckpt['trans'].keys())[0]:
-            new_ckpt = {}
-            for k, v in ckpt['trans'].items():
-                new_k = k.replace('module.', '') if 'module' in k else k
-                new_ckpt[new_k] = v
-            net.load_state_dict(new_ckpt, strict=True)
-        else:
-            net.load_state_dict(ckpt['trans'], strict=False)
-
-    # 读初始semboost
-    # ckpt = torch.load(args.resume_trans, map_location='cpu')['ema']
-    # model_dict = net.state_dict()
-    # # pretrained_dict = {'module.'+k: v for k, v in pretrained_dict.items()}
-    # ckpt = {k: v for k, v in ckpt.items() if k in model_dict} # 过滤不存在的key
-    # ckpt = {k: v for k, v in ckpt.items() if model_dict[k].shape==v.shape} # 过滤存在但形状不一致的key
-    # model_dict.update(ckpt)
-    # _, unexpect_keys = net.load_state_dict(model_dict, strict=False)
-    # print('unexpect_keys=',unexpect_keys)
-
-    # if args.resume_trans is not None:
-    #     print ('loading checkpoint from {}'.format(args.resume_trans))
-    #     ckpt = torch.load(args.resume_trans, map_location='cpu')
-    #     net.load_state_dict(ckpt['trans'], strict=True)
-    # net.eval(); logger.info(' net is eval !!!!!!!')
-    net.train(); logger.info(' net is train ~~~~~')
+    load_ckpt(net, args.resume_trans, key='trans')
+            
+    if sys.gettrace():
+        net.eval(); logger.info(' net is eval !!!!!!!')
+    else:
+        net.train(); logger.info(' net is train ~~~~~')
 
     net = nn.DataParallel(net, device_ids=list(range(0,len(args.gpu))))
     net.cuda()
 
-    codebook_dir = None
 
     # dataloader
-    train_loader = dataset_control.DataLoader(batch_size=args.batch_size, args=args, codebook_dir=codebook_dir,
-                                              mode=args.mode)
+    train_loader = dataset_control.DataLoader(batch_size=args.batch_size, args=args, mode=args.mode)
     train_loader_iter = dataset_control.cycle(train_loader)
     # val_loader = dataset_control.DataLoader(batch_size=args.batch_size, args=args, mode='train', split='val')
     # val_loader_iter = dataset_control.cycle(val_loader)
     test_loader = dataset_control.DataLoader(batch_size=128, args=args, mode='eval', split='test', shuffle=False, num_workers=4, drop_last=True)
 
     # 训练配置
-    optimizer = utils_model.initial_optim(args.decay_option, args.lr, args.weight_decay, net, args.optimizer)
+    optimizer = initial_optim(args.lr, args.weight_decay, net, args.optimizer)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_scheduler, gamma=args.gamma)
 
     # 2个基于VQVAE的根网络
