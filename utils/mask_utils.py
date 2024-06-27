@@ -2,17 +2,26 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 from utils.motion_process import recover_from_ric, recover_root_rot_pos
-from utils.vis_utils import visualize_2motions
+from utils.vis_utils import visualize_2motions, animate3d
 from einops import rearrange
 import matplotlib.pyplot as plt
 
 humanml_mean = torch.from_numpy(np.load('dataset/HumanML3D/Mean.npy'))[None, None, ...].cuda() # (1,1,263) dataset/HumanML3D/Mean.npy
 humanml_std = torch.from_numpy(np.load('dataset/HumanML3D/Std.npy'))[None, None, ...].cuda()   # (1,1,263)
-# kit_mean = torch.from_numpy(np.load('dataset/KIT/Mean.npy'))[None, None, ...].cuda()
-# kit_std = torch.from_numpy(np.load('dataset/KIT/Std.npy'))[None, None, ...].cuda() 
+kit_mean = torch.from_numpy(np.load('dataset/KIT-ML/Mean.npy'))[None, None, ...].cuda()
+kit_std = torch.from_numpy(np.load('dataset/KIT-ML/Std.npy'))[None, None, ...].cuda() 
 
 humanml_raw_mean = torch.from_numpy(np.load('dataset/humanml_spatial_norm/Mean_raw.npy')).cuda()[None, None, ...].view(1,1,22,3) 
 humanml_raw_std = torch.from_numpy(np.load('dataset/humanml_spatial_norm/Std_raw.npy')).cuda()[None, None, ...].view(1,1,22,3)
+
+kit_bone = [[0, 11], [11, 12], [12, 13], [13, 14], [14, 15], [0, 16], [16, 17], [17, 18], [18, 19], [19, 20], [0, 1], [1, 2], [2, 3], [3, 4], [3, 5], [5, 6], [6, 7], [3, 8], [8, 9], [9, 10]]
+t2m_bone = [[0,2], [2,5],[5,8],[8,11],
+            [0,1],[1,4],[4,7],[7,10],
+            [0,3],[3,6],[6,9],[9,12],[12,15],
+            [9,14],[14,17],[17,19],[19,21],
+            [9,13],[13,16],[16,18],[18,20]]
+kit_kit_bone = kit_bone + (np.array(kit_bone)+21).tolist()
+t2m_t2m_bone = t2m_bone + (np.array(t2m_bone)+22).tolist()
 
 def random_window_mask(motion, real_length):
     '''
@@ -54,31 +63,61 @@ def recover(motion):
     xyz = recover_from_ric(motion * humanml_std + humanml_mean, joints_num=22)
     return xyz
 
-def vis_motion(pred, gt=None, dataset='t2m', save_path='./output/testsample/1.html'):
+def vis_motion(pred_motion, gt_motion=None, dataset='t2m', save_path='./output/testsample/1.html', length=None):
     """vis function for visualization conveniently
 
     Args:
-        pred (torch.Tensor): (L, dim)
-        gt (torch.Tensor): (L, dim)
+        pred_motion (torch.Tensor): (L, dim)
+        gt_motion (torch.Tensor): (L, dim)
         dataset (str, optional):
     """
-    assert len(pred.shape) == 2, f"got pred.shape = {pred.shape}"
-    assert len(gt.shape) == 2, f"got gt.shape = {gt.shape}"
+    assert len(pred_motion.shape) == 2, f"got pred.shape = {pred_motion.shape}"
+    assert len(gt_motion.shape) == 2, f"got gt.shape = {gt_motion.shape}"
+    if gt_motion is not None:
+        assert pred_motion.shape == gt_motion.shape, f"got pred.shape = {pred_motion.shape},  gt.shape = {gt_motion.shape}"
+    dim = pred_motion.shape[-1]
     
     if dataset == 't2m':
-        mean = np.load('dataset/HumanML3D/Mean.npy')[None, ...] # dataset/HumanML3D/Mean.npy
-        std = np.load('dataset/HumanML3D/Std.npy')[None, ...]
+        mean = np.load('dataset/HumanML3D/Mean.npy')[None, :dim] # dataset/HumanML3D/Mean.npy
+        std = np.load('dataset/HumanML3D/Std.npy')[None, :dim]
+        first_total_standard = 63
+        bone_link = t2m_bone
+        if gt_motion is not None:
+            bone_link = t2m_t2m_bone
+        joints_num = 22
+        scale = 1#/1000
     else:
-        mean = np.load('dataset/KIT/Mean.npy')[None, ...] # dataset/HumanML3D/Mean.npy
-        std = np.load('dataset/KIT/Std.npy')[None, ...]
+        mean = np.load('dataset/KIT/Mean.npy')[None, :dim] # dataset/HumanML3D/Mean.npy
+        std = np.load('dataset/KIT/Std.npy')[None, :dim]
+        first_total_standard = 60
+        bone_link = kit_bone
+        if gt_motion is not None:
+            bone_link = kit_kit_bone
+        joints_num = 21
+        scale = 1/1000
 
-    if type(pred) == torch.Tensor:
-        pred = pred.detach().cpu().numpy()
-    if type(gt) == torch.Tensor:
-        gt = gt.detach().cpu().numpy()
+    if type(pred_motion) == torch.Tensor:
+        pred_motion = pred_motion.detach().cpu().numpy()
+    if type(gt_motion) == torch.Tensor:
+        gt_motion = gt_motion.detach().cpu().numpy()
 
-    print(f'save motion html in {save_path}')
-    visualize_2motions(pred, std, mean, 't2m', None, motion2=None if gt is None else gt, save_path=save_path)
+    pred_motion = pred_motion * std + mean
+    gt_motion = gt_motion * std + mean
+
+    # convert to global position
+    joint1 = recover_from_ric(torch.from_numpy(pred_motion).float(), joints_num).numpy()
+    if gt_motion is not None:
+        joint2 = recover_from_ric(torch.from_numpy(gt_motion).float(), joints_num).numpy()
+        joint_original_forward = np.concatenate((joint1, joint2), axis=1)
+    else:
+        joint_original_forward = joint1
+    animate3d(joint_original_forward[:length]*scale, 
+              BONE_LINK=bone_link, 
+              first_total_standard=first_total_standard, 
+              save_path=save_path) # 'init.html'
+
+    # print(f'save motion html in {save_path}')
+    # visualize_2motions(pred, std[..., :dim], mean[..., :dim], 't2m', None, motion2=None if gt is None else gt, save_path=save_path)
 
 def complete_mask(traj_mask_263, traj_mask):
     control_id = traj_mask[0].sum(0).sum(-1).nonzero()

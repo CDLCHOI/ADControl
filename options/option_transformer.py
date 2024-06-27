@@ -4,6 +4,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser(description='Optimal Transport AutoEncoder training for Amass',
                                      add_help=True,
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--no_renorm', action='store_true', default=False)
     parser.add_argument('--loss_type', type=str, choices=['l1', 'l2'], default='l1')
     # parser.add_argument("--control_joint", default=-1, type=int, help='-1 means randomly choose a joint')
     parser.add_argument('--control_joint', default=[-1], nargs="+", type=int)

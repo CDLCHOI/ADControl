@@ -11,7 +11,7 @@ from torch.utils.data._utils.collate import default_collate
 from utils.word_vectorizer import WordVectorizer
 from options.get_eval_option import get_opt
 from utils.motion_process import recover_root_rot_pos, recover_from_ric
-from utils.mask_utils import vis_motion, create_trajmask263
+from utils.mask_utils import create_trajmask263
 import sys
 
 def collate_fn(batch):
@@ -60,7 +60,7 @@ class ControlDataset(data.Dataset):
 
         new_name_list = []
         length_list = []
-        id_list = id_list[:222]  if sys.gettrace() else id_list
+        # id_list = id_list[:222]  if sys.gettrace() else id_list
         # if self.mode == 'debug':
         # id_list = id_list[:32]
         
@@ -254,16 +254,26 @@ class ControlDataset(data.Dataset):
         return len(self.data_dict) - self.pointer
 
     def __getitem__(self, item):
+        '''随机性
+        1. 文本随机 text_data = random.choice(text_list)
+        2. coin2 = np.random.choice(['single', 'single', 'double'])
+        3. 动作随机起点截取 idx = random.randint(0, len(motion) - m_length)
+        '''
         idx = self.pointer + item
         # idx = 29
         data = self.data_dict[self.name_list[idx]]
         # data = self.data_dict['000007'] 
-        
-        # print('idx = ', idx, self.name_list[idx])
+        # if idx <= 32:
+        #     print('idx = ', idx, self.name_list[idx])
         motion, m_length, text_list = data['motion'], data['length'], data['text']
         # Randomly select a caption
+        # if self.mode == 'train':
         text_data = random.choice(text_list)
+        # else:
+        #     text_data = text_list[0] ## debug
         caption, tokens = text_data['caption'], text_data['tokens']
+
+        
 
         if len(tokens) < self.opt.max_text_len:
             # 句子短，补SOS和EOS token，然后补unknown token至固定长度
@@ -285,6 +295,7 @@ class ControlDataset(data.Dataset):
         word_embeddings = np.concatenate(word_embeddings, axis=0)  # (22,300)
 
         # 将动作长度截取为unit_length即4的整数倍，并通过coin2引入一些随机，无需细抠
+        # if self.mode == 'train':
         if self.opt.unit_length < 10:
             coin2 = np.random.choice(['single', 'single', 'double'])
         else:
@@ -293,7 +304,13 @@ class ControlDataset(data.Dataset):
             m_length = (m_length // self.opt.unit_length - 1) * self.opt.unit_length
         elif coin2 == 'single':
             m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
+        # else:
+        #     m_length = (m_length // self.opt.unit_length) * self.opt.unit_length
+
+        # if self.mode == 'train':
         idx = random.randint(0, len(motion) - m_length)
+        # else:
+        #     idx = 0
         motion = motion[idx:idx+m_length]
 
         n_joints = 22 if motion.shape[-1] == 263 else 21
@@ -314,6 +331,8 @@ class ControlDataset(data.Dataset):
         # motion 263的归一化
         motion = (motion - self.mean) / self.std
         
+        
+
         if m_length < self.max_motion_length: # 固定输出动作长度为max_length ！！
             hint   = np.concatenate([hint, np.zeros((self.max_motion_length - m_length, hint.shape[1])) ], axis=0)
             motion = np.concatenate([motion, np.zeros((self.max_motion_length - m_length, motion.shape[1])) ], axis=0)
@@ -330,6 +349,7 @@ class ControlDataset(data.Dataset):
             assert np.allclose(joints * traj_mask[:m_length, ...] , ((hint * self.raw_std + self.raw_mean) * traj_mask)[:m_length, ...], atol=1e-6)
         else:
             assert (joints*traj_mask[:m_length, ...] - hint[:m_length, ...]).sum() == 0
+
 
         if not self.codebook_dir: # 如果是训练2阶段的AE，即无codebook_dir，这里就返回
             return word_embeddings, pos_one_hots, caption, sent_len, motion, m_length, '_'.join(tokens), hint, traj_mask_263, traj_mask
@@ -418,6 +438,7 @@ def DataLoader(batch_size, args, shuffle=False, codebook_dir=None, mode='train',
     if batch_size == 1:
         num_workers = 0
     train_loader = torch.utils.data.DataLoader(dataset, batch_size, collate_fn=collate_fn if split=='test' else None, shuffle=shuffle, num_workers=num_workers, drop_last = drop_last)
+    # train_loader = torch.utils.data.DataLoader(dataset, batch_size, collate_fn=None, shuffle=shuffle, num_workers=num_workers, drop_last = drop_last)
     return train_loader
 
 def cycle(iterable):

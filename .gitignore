@@ -7,3 +7,4 @@ eval_new.py
 eval_debug.py
 recoverML3D.py
 glove/
+*.ipynb

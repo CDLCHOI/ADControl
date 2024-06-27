@@ -158,16 +158,11 @@ def evaluate_control(motion_loader, diffusion_root, mean, std, args, logger, bat
 
             condition = {}
             condition['traj'] = traj
-            condition['text_emb'] = text_emb
-            condition['word_emb'] = word_emb
             condition['traj_mask'] = traj_mask
             condition['traj_mask_263'] = traj_mask_263
             condition['gt_motion'] = gt_motion
-            condition['traj'] = traj
             condition['real_mask'] = real_mask
             condition['clip_text'] = clip_text
-            # condition['mean'] = mean # 这里赋值，就是guide里面使用
-            # condition['std'] = std
 
             # # 采样根节点轨迹
             if diffusion_root.modeltype == 'omni67': 
@@ -187,8 +182,8 @@ def evaluate_control(motion_loader, diffusion_root, mean, std, args, logger, bat
             ###
             else:
                 motions = pred_ric
+
             num_features = motions.shape[-1]
-            # motions = motions * mean_for_eval[..., :num_features] + std_for_eval[..., :num_features]
             motions = motions * std[..., :num_features] + mean[..., :num_features]
             motions = motions.float()
             n_joints = 22 # if motions.shape[-1] == 67 else 21

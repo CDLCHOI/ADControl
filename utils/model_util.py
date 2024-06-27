@@ -35,6 +35,8 @@ def sample_ADControl(diffusion_root, diffusion, args, model_kwargs, vis=False):
     """
     # stage1
     pred_ric = diffusion_root.p_sample_loop(partial_emb=None, model_kwargs=model_kwargs,batch_size=args.batch_size)
+    if vis:
+        vis_motion(pred_ric[0], model_kwargs['gt_ric'][0], dataset=args.dataset_name, save_path=f'./output/testsample/stage1.html')
 
     if args.normalize_traj:
         traj = model_kwargs['traj'] * diffusion_root.raw_std + diffusion_root.raw_mean
@@ -47,9 +49,8 @@ def sample_ADControl(diffusion_root, diffusion, args, model_kwargs, vis=False):
         partial_emb[..., :67] = pred_ric  
         pred_motion = diffusion.p_sample_loop(partial_emb, with_control=True, model_kwargs=model_kwargs, batch_size=args.batch_size) 
         if vis:
-            vis_motion(pred_motion[0], model_kwargs['gt_motion'][0], dataset=args.dataset_name, save_path=f'./output/testsample/{j+1}.html')
+            vis_motion(pred_motion[0], model_kwargs['gt_motion'][0], dataset=args.dataset_name, save_path=f'./output/testsample/stage2_{j+1}.html')
         sample.append(pred_motion)
-
     
     return sample, loss_xyz
 

@@ -1,10 +1,11 @@
 import sys
-sys.path.append('.')
+# sys.path.append('.')
 import options.option_transformer as option_trans
+args = option_trans.get_args_parser()
 import os 
-os.environ['CUDA_VISIBLE_DEVICES'] = '7'
+os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(args.gpu)
+# os.environ['CUDA_VISIBLE_DEVICES'] = '7'
 os.environ['OMP_NUM_THREADS'] = '8'
-from utils import dist_util
 from utils.fixseed import fixseed
 import torch
 from data_loaders.humanml.utils.metrics import *
@@ -12,47 +13,40 @@ from datetime import datetime
 import numpy as np
 from collections import OrderedDict
 from data_loaders.humanml.motion_loaders.model_motion_loaders import get_control_dataset
-import clip
-import time
 from dataset import dataset_control
 import warnings
 warnings.filterwarnings('ignore')
-# from diffusion import logger
 from data_loaders.humanml.networks.evaluator_wrapper import EvaluatorMDMWrapper
-from utils.mask_utils import calc_grad_scale, TextCLIP, calc_loss_xyz, load_ckpt
-from utils.model_util import create_gaussian_diffusion_simple, get_logger
-from models.cfg_sampler import ClassifierFreeSampleModelADC,ClassifierFreeSampleModel
+from utils.mask_utils import load_ckpt
+from utils.model_util import create_gaussian_diffusion_simple, get_logger, get_clip_model
+from models.cfg_sampler import ClassifierFreeSampleModel
 
-def refine(args):
-    args.roottype = 'root'
-    args.exp_name = 'debug_model'
-    args.print_iter = 1
-    args.overwrite = True
-    args.total_iter_ROOT = 20
-    args.total_iter_ED = 1 
-    args.dense_control = False
-    return args
 
 def evaluate_matching_score(eval_wrapper, motion_loaders, file):
     match_score_dict = OrderedDict({})
     R_precision_dict = OrderedDict({})
     activation_dict = OrderedDict({})
     print('========== Evaluating Matching Score ==========')
+    motiontmp = []
+    txttmp = []
     for motion_loader_name, motion_loader in motion_loaders.items():
         all_motion_embeddings = []
         score_list = []
         all_size = 0
         matching_score_sum = 0
         top_k_count = 0
-        # print(motion_loader_name)
+        if motion_loader_name == 'ground truth':
+            a = 1
         with torch.no_grad():
             for idx, batch in enumerate(motion_loader):
                 if len(batch) == 7:
-                    word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _ = batch
+                    word_embeddings, pos_one_hots, caption, sent_lens, motions, m_lens, _ = batch
                 elif motion_loader_name == 'ground truth':
-                    word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _, _, _, _= batch
+                    word_embeddings, pos_one_hots, caption, sent_lens, motions, m_lens, _, _, _, _= batch
                 else:
-                    word_embeddings, pos_one_hots, _, sent_lens, motions, m_lens, _, _ = batch
+                    word_embeddings, pos_one_hots, caption, sent_lens, motions, m_lens, _, _ = batch
+
+
                 text_embeddings, motion_embeddings = eval_wrapper.get_co_embeddings(
                     word_embs=word_embeddings,
                     pos_ohot=pos_one_hots,
@@ -60,6 +54,7 @@ def evaluate_matching_score(eval_wrapper, motion_loaders, file):
                     motions=motions,
                     m_lens=m_lens
                 )
+                
                 dist_mat = euclidean_distance_matrix(text_embeddings.cpu().numpy(),
                                                      motion_embeddings.cpu().numpy())
                 matching_score_sum += dist_mat.trace()
@@ -71,6 +66,7 @@ def evaluate_matching_score(eval_wrapper, motion_loaders, file):
                 all_size += text_embeddings.shape[0]
 
                 all_motion_embeddings.append(motion_embeddings.cpu().numpy())
+
 
             all_motion_embeddings = np.concatenate(all_motion_embeddings, axis=0)
             matching_score = matching_score_sum / all_size
@@ -106,10 +102,8 @@ def evaluate_fid(eval_wrapper, groundtruth_loader, activation_dict, file):
     gt_motion_embeddings = np.concatenate(gt_motion_embeddings, axis=0)
     gt_mu, gt_cov = calculate_activation_statistics(gt_motion_embeddings)
 
-    # print(gt_mu)
     for model_name, motion_embeddings in activation_dict.items():
         mu, cov = calculate_activation_statistics(motion_embeddings)
-        # print(mu)
         fid = calculate_frechet_distance(gt_mu, gt_cov, mu, cov)
         print(f'---> [{model_name}] FID: {fid:.4f}')
         print(f'---> [{model_name}] FID: {fid:.4f}', file=file, flush=True)
@@ -155,7 +149,6 @@ def get_metric_statistics(values, replication_times):
     std = np.std(values, axis=0)
     conf_interval = 1.96 * std / np.sqrt(replication_times)
     return mean, conf_interval
-
 
 
 def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replication_times, diversity_times, mm_num_times, run_mm=False):
@@ -204,112 +197,99 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
             print(f'!!! DONE !!!')
             print(f'!!! DONE !!!', file=f, flush=True)
 
-        #     for key, item in mat_score_dict.items():
-        #         if key not in all_metrics['Matching Score']:
-        #             all_metrics['Matching Score'][key] = [item]
-        #         else:
-        #             all_metrics['Matching Score'][key] += [item]
+            for key, item in mat_score_dict.items():
+                if key not in all_metrics['Matching Score']:
+                    all_metrics['Matching Score'][key] = [item]
+                else:
+                    all_metrics['Matching Score'][key] += [item]
 
-        #     for key, item in R_precision_dict.items():
-        #         if key not in all_metrics['R_precision']:
-        #             all_metrics['R_precision'][key] = [item]
-        #         else:
-        #             all_metrics['R_precision'][key] += [item]
+            for key, item in R_precision_dict.items():
+                if key not in all_metrics['R_precision']:
+                    all_metrics['R_precision'][key] = [item]
+                else:
+                    all_metrics['R_precision'][key] += [item]
 
-        #     for key, item in fid_score_dict.items():
-        #         if key not in all_metrics['FID']:
-        #             all_metrics['FID'][key] = [item]
-        #         else:
-        #             all_metrics['FID'][key] += [item]
+            for key, item in fid_score_dict.items():
+                if key not in all_metrics['FID']:
+                    all_metrics['FID'][key] = [item]
+                else:
+                    all_metrics['FID'][key] += [item]
 
-        #     for key, item in div_score_dict.items():
-        #         if key not in all_metrics['Diversity']:
-        #             all_metrics['Diversity'][key] = [item]
-        #         else:
-        #             all_metrics['Diversity'][key] += [item]
-        #     if run_mm:
-        #         for key, item in mm_score_dict.items():
-        #             if key not in all_metrics['MultiModality']:
-        #                 all_metrics['MultiModality'][key] = [item]
-        #             else:
-        #                 all_metrics['MultiModality'][key] += [item]
+            for key, item in div_score_dict.items():
+                if key not in all_metrics['Diversity']:
+                    all_metrics['Diversity'][key] = [item]
+                else:
+                    all_metrics['Diversity'][key] += [item]
+            if run_mm:
+                for key, item in mm_score_dict.items():
+                    if key not in all_metrics['MultiModality']:
+                        all_metrics['MultiModality'][key] = [item]
+                    else:
+                        all_metrics['MultiModality'][key] += [item]
 
 
-        # # print(all_metrics['Diversity'])
-        # mean_dict = {}
-        # for metric_name, metric_dict in all_metrics.items():
-        #     print('========== %s Summary ==========' % metric_name)
-        #     print('========== %s Summary ==========' % metric_name, file=f, flush=True)
-        #     for model_name, values in metric_dict.items():
-        #         # print(metric_name, model_name)
-        #         mean, conf_interval = get_metric_statistics(np.array(values), replication_times)
-        #         mean_dict[metric_name + '_' + model_name] = mean
-        #         # print(mean, mean.dtype)
-        #         if isinstance(mean, np.float64) or isinstance(mean, np.float32):
-        #             print(f'---> [{model_name}] Mean: {mean:.4f} CInterval: {conf_interval:.4f}')
-        #             print(f'---> [{model_name}] Mean: {mean:.4f} CInterval: {conf_interval:.4f}', file=f, flush=True)
-        #         elif metric_name == 'Trajectory Error':
-        #             traj_err_key = ["traj_fail_20cm", "traj_fail_50cm", "kps_fail_20cm", "kps_fail_50cm", "kps_mean_err(m)"]
-        #             line = f'---> [{model_name}]'
-        #             for i in range(len(mean)): # zip(traj_err_key, mean):
-        #                 line += '(%s): Mean: %.4f CInt: %.4f; ' % (traj_err_key[i], mean[i], conf_interval[i])
-        #             print(line)
-        #             print(line, file=f, flush=True)
-        #         elif isinstance(mean, np.ndarray):
-        #             line = f'---> [{model_name}]'
-        #             for i in range(len(mean)):
-        #                 line += '(top %d) Mean: %.4f CInt: %.4f;' % (i+1, mean[i], conf_interval[i])
-        #             print(line)
-        #             print(line, file=f, flush=True)
-        # return mean_dict
+        # print(all_metrics['Diversity'])
+        mean_dict = {}
+        for metric_name, metric_dict in all_metrics.items():
+            print('========== %s Summary ==========' % metric_name)
+            print('========== %s Summary ==========' % metric_name, file=f, flush=True)
+            for model_name, values in metric_dict.items():
+                # print(metric_name, model_name)
+                mean, conf_interval = get_metric_statistics(np.array(values), replication_times)
+                mean_dict[metric_name + '_' + model_name] = mean
+                # print(mean, mean.dtype)
+                if isinstance(mean, np.float64) or isinstance(mean, np.float32):
+                    print(f'---> [{model_name}] Mean: {mean:.4f} CInterval: {conf_interval:.4f}')
+                    print(f'---> [{model_name}] Mean: {mean:.4f} CInterval: {conf_interval:.4f}', file=f, flush=True)
+                elif metric_name == 'Trajectory Error':
+                    traj_err_key = ["traj_fail_20cm", "traj_fail_50cm", "kps_fail_20cm", "kps_fail_50cm", "kps_mean_err(m)"]
+                    line = f'---> [{model_name}]'
+                    for i in range(len(mean)): # zip(traj_err_key, mean):
+                        line += '(%s): Mean: %.4f CInt: %.4f; ' % (traj_err_key[i], mean[i], conf_interval[i])
+                    print(line)
+                    print(line, file=f, flush=True)
+                elif isinstance(mean, np.ndarray):
+                    line = f'---> [{model_name}]'
+                    for i in range(len(mean)):
+                        line += '(top %d) Mean: %.4f CInt: %.4f;' % (i+1, mean[i], conf_interval[i])
+                    print(line)
+                    print(line, file=f, flush=True)
+        return mean_dict
 
 
 
 if __name__ == '__main__':
-    args = option_trans.get_args_parser()
     fixseed(args.seed)
-    args = refine(args)
-    # args.device = 0
     args.guidance_param = 2.5
     args.batch_size = 32 # This must be 32! Don't change it! otherwise it will cause a bug in R precision calc!
 
     # 需要修改的地方
     args.dataset = 'humanml' # choices=['humanml', 'kit', 'humanact12', 'uestc'], type=str,
-    args.control_joint = 0
+    if sys.gettrace():
+        args.control_joint = 0
     args.density = 100
     args.eval_mode = 'ADControl'
-    # args.modeltype = 'diffmdm'
-    args.modeltype = 'semboost'
-    if args.modeltype == 'diffmae_stage2_2':
-        args.resume_trans = 'output/0509_diffmae_stage2_2_E8D0_multicontrol_pretrain/net_last.pth'
-        args.resume_trans = '/home/shenbo/projects/OmniControl/output/0518_diffmae_stage2_2_L2loss/net_last.pth'
-    elif args.modeltype == 'diffmdm':
-        # args.resume_trans = '/home/shenbo/projects/OmniControl/output/0519_diffmdm/net_last.pth'
-        args.resume_trans = '/home/shenbo/projects/OmniControl/savemdm/model000475000.pt'
-    elif args.modeltype == 'semboost':
-        # args.resume_trans = '/home/shenbo/projects/OmniControl/output/0520_semboost/net_last.pth'
-        args.resume_trans = '/home/shenbo/projects/OmniControl/output/0520_semboost_latest/net_last.pth'
-        # args.resume_trans = '/home/shenbo/projects/OmniControl/output/0520_semboost_noxyzloss/net_last.pth'
-    # args.resume_trans = '/home/shenbo/projects/OmniControl/output/stage2_mdm/net_last.pth'
-    # args.resume_root = 'output/0514_omni67_normtraj_multicontrol/net_last.pth'
+    
     args.resume_root = './output/0518_omni67_multi_partxyz/net_last.pth'; args.roottype = 'omni67'
+    args.resume_trans = './output/0520_semboost/net_last.pth'; args.modeltype = 'semboost'
+
     args.normalize_traj=True # 归一化轨迹再输入
     if args.eval_mode == 'ADControl':
         num_samples_limit = 1000
-        run_mm =False
-        mm_num_samples = 0
-        mm_num_repeats = 0
-        mm_num_times = 0
+        run_mm = False
+        mm_num_samples = 0 #  100
+        mm_num_repeats = 0 # 一个文本生成几次动作, 30次
+        mm_num_times = 0 # 10   算multimodality
         diversity_times = 300
-        replication_times = 1 # 重复测试次数
+        replication_times = 5 # 重复测试次数
     else:
         raise ValueError()
 
-    name = os.path.basename(os.path.dirname(args.resume_trans))
-    niter = os.path.basename(args.resume_trans).replace('model', '').replace('.pt', '')
-    log_file = f'output/log/evalADControl_gtric_joint_{args.control_joint}_density_{args.density}.log'
-    log_file = f'output/log/evalADControl_joint_{args.control_joint}_density_{args.density}.log'
-    log_file = f'output/log/evalADControl_gtric_with_renorm.log'
+    if args.no_renorm:
+        log_file = f'{os.path.dirname(args.resume_trans)}/joint_{args.control_joint}_density_{args.density}_norenorm.log'
+    else:
+        log_file = f'{os.path.dirname(args.resume_trans)}/joint_{args.control_joint}_density_{args.density}.log'
+    
     if sys.gettrace():
         log_file = f'output/log/1.log'
     logger = get_logger('', file_path=log_file)
@@ -317,19 +297,10 @@ if __name__ == '__main__':
     logger.info(f'args.resume_root = {args.resume_root}')
     logger.info(f'args.resume_trans = {args.resume_trans}')
     logger.info(f'control joint = {args.control_joint}, density = {args.density}')
-    logger.info(f'无1阶段，使用gtric，有renorm') # 对文件的说明
-
-    print(f'Eval mode [{args.eval_mode}]')
-    
 
 
-    ##### ---- CLIP ---- #####
-    clip_model, clip_preprocess = clip.load("ViT-B/32", device=torch.device('cuda'), jit=False)  # Must set jit=False for training
-    clip.model.convert_weights(clip_model)  # Actually this line is unnecessary since clip by default already on float16
-    clip_model.eval()
-    for p in clip_model.parameters():
-        p.requires_grad = False
-    clip_model = TextCLIP(clip_model)
+    # CLIP
+    clip_model = get_clip_model()
 
     # 根节点网络
     if args.roottype == 'omni67':
@@ -353,11 +324,8 @@ if __name__ == '__main__':
     load_ckpt(net, args.resume_trans, key='trans')
 
     if args.guidance_param != 1:
-        if args.modeltype == 'diffmae_stage2_2':
-            net = ClassifierFreeSampleModelADC(net, args=args)
-        elif args.modeltype == 'diffmdm' or args.modeltype == 'semboost':
+        if args.modeltype == 'diffmdm' or args.modeltype == 'semboost':
             net = ClassifierFreeSampleModel(net)
-            # net = ClassifierFreeSampleModelADC(net, args=args)
             
     diffusion = create_gaussian_diffusion_simple(args, net, args.modeltype, clip_model)
     net.cuda()

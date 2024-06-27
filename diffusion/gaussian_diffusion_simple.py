@@ -6,9 +6,9 @@ from os.path import join as pjoin
 from tqdm import tqdm
 import clip
 
-from utils.mask_utils import root_dist_loss, TextCLIP, recover, vis_motion, calc_loss_xyz, generate_src_mask
-from utils.motion_process import recover_from_ric, recover_root_rot_pos
-from utils.metrics import evaluate_control, evaluate_control_whentraining
+from utils.mask_utils import root_dist_loss, generate_src_mask
+from utils.motion_process import recover_from_ric
+from utils.metrics import evaluate_control_whentraining
 from diffusion.resample import create_named_schedule_sampler
 
 class GaussianDiffusionSimple:
@@ -140,7 +140,6 @@ class GaussianDiffusionSimple:
         for nb_iter in tqdm(range(1, self.args.total_iter+1), position=0, leave=True):
             batch = next(dataloader_iter)
             word_embeddings, pos_one_hots, clip_text, sent_len, gt_motion, real_length, txt_tokens, traj, traj_mask_263, traj_mask = batch
-            # clip_text, gt_token, m_tokens_len = batch
             b, max_length, num_features = gt_motion.shape
             gt_motion = gt_motion.cuda()
             real_length = real_length.cuda()
@@ -148,12 +147,9 @@ class GaussianDiffusionSimple:
             traj_mask_263 = traj_mask_263.cuda()
             traj_mask = traj_mask.cuda()
             real_mask = generate_src_mask(max_length, real_length) # (b,196)
-        
-            # text = clip.tokenize(clip_text, truncate=True).cuda()        
-            # text_emb, word_emb = self.clip_model(text) # (b,512)  (b,77,512)
+
 
             t, weights = self.schedule_sampler.sample(b, gt_motion.device) # timestep
-            # t = torch.tensor([999]*b).cuda() # debug用
             x0 = gt_motion
             noise = torch.randn_like(x0) # 生成与x0形状一样的高斯噪声
             xt = self.q_sample(x0, t, noise=noise) # 给数据集x0加t步噪声
@@ -164,7 +160,6 @@ class GaussianDiffusionSimple:
                 masked_xt = xt 
             # 前向
             masked_xt = masked_xt.permute(0,2,1)[:,:,None]
-            # masked_xt= torch.ones((1,263,1,120)).cuda()*0.5 # debug用
             y={'text': clip_text}
             pred_x0 = self.model(masked_xt, t, y=y)  # (b,196,263)
             pred_x0 = pred_x0.squeeze(2).permute(0,2,1)
@@ -194,11 +189,9 @@ class GaussianDiffusionSimple:
         xyz_real_mask = real_mask[..., None, None].repeat(1,1,22,3)
         if self.args.loss_type == 'l1':
             loss_motion = F.l1_loss(pred[motion_real_mask], gt[motion_real_mask])
-            loss_xyz_all = F.l1_loss(recon_xyz[xyz_real_mask], gt_xyz[xyz_real_mask]) # 约束全身轨迹  都替换为L1Loss
             loss_xyz_part = F.l1_loss(recon_xyz[traj_mask], traj[traj_mask]) # 仅约束控制轨迹
         elif self.args.loss_type == 'l2':
             loss_motion = F.mse_loss(pred[motion_real_mask], gt[motion_real_mask])
-            loss_xyz_all = F.mse_loss(recon_xyz[xyz_real_mask], gt_xyz[xyz_real_mask]) # 约束全身轨迹  都替换为L1Loss
             loss_xyz_part = F.mse_loss(recon_xyz[traj_mask], traj[traj_mask]) # 仅约束控制轨迹
 
         gt_root = (gt * std + mean)[..., :4]
@@ -221,44 +214,11 @@ class GaussianDiffusionSimple:
         msg += f' loss_rotate_global. {loss_rotate_global:.4f}, loss_position_global. {loss_position_global:.4f} '
         return loss, msg
 
-    def p_sample_single(self, dataloader_iter):
-        # mean and std
-        if self.args.dataset_name == 't2m':
-            mean = torch.from_numpy(np.load('dataset/HumanML3D/Mean.npy')).cuda()[None, None, ...] # dataset/HumanML3D/Mean.npy
-            std = torch.from_numpy(np.load('dataset/HumanML3D/Std.npy')).cuda()[None, None, ...]
-        elif self.args.dataset_name == 'kit':
-            mean = torch.from_numpy(np.load('dataset/HumanML3D/Mean.npy')).cuda()[None, None, ...] # dataset/HumanML3D/Mean.npy
-            std = torch.from_numpy(np.load('dataset/HumanML3D/Std.npy')).cuda()[None, None, ...]
-
-        for nb_iter in tqdm(range(1, self.args.total_iter+1), position=0, leave=True):
-            batch = next(dataloader_iter)
-            word_embeddings, pos_one_hots, clip_text, sent_len, gt_motion, real_length, txt_tokens, traj, traj_mask_263, traj_mask = batch
-            # clip_text, gt_token, m_tokens_len = batch
-            b, max_length, num_features = gt_motion.shape
-            gt_motion = gt_motion.cuda()
-            real_length = real_length.cuda()
-            traj = traj.cuda()
-            traj_mask_263 = traj_mask_263.cuda()
-            traj_mask = traj_mask.cuda()
-            real_mask = generate_src_mask(max_length, real_length) # (b,196)
-            
-            text = clip.tokenize(clip_text, truncate=True).cuda()        
-            text_emb, word_emb = self.clip_model(text) # (b,512)  (b,77,512)
-
-            # t, weights = self.schedule_sampler.sample(b, gt_motion.device) # timestep
-            t = torch.tensor([999]*b).cuda()
-            x0 = gt_motion
-            noise = torch.randn_like(x0) # 生成与x0形状一样的高斯噪声
-            # xt = self.q_sample(x0, t, noise=noise) # 给数据集x0加t步噪声
-            masked_xt = torch.where(traj_mask_263, gt_motion, noise) # mask以外的部分恢复原数值
-            # 前向
-            pred_x0 = self.model(masked_xt, t, text_emb, word_emb) # (b,196,263)
-            loss, msg = self.calc_loss(x0, pred_x0, mean, std, traj_mask, traj, real_mask, traj_mask_263, num_features, nb_iter)
-            print(msg)
-            a = 1
-
+    #############################################################################################################
+    #############################################################################################################
+    #############################################################################################################
     @torch.no_grad()
-    def p_sample_loop(self, partial_emb, with_control=True, model_kwargs=None, control_once=False, batch_size=1):
+    def p_sample_loop(self, partial_emb, with_control=True, model_kwargs=None, batch_size=1):
         '''
         partial_emb: (b,196,263)
         condition: 字典，包含文本条件和轨迹条件
@@ -267,52 +227,32 @@ class GaussianDiffusionSimple:
         skip_t = 0
         indices = list(range(self.num_timesteps - skip_t))[::-1]
 
-        # 初始化噪声方式1
-        # noise = torch.randn(*(partial_emb.shape)).cuda()
-        # zero = torch.zeros_like(partial_emb).cuda()
-        # my_t = torch.ones([B], dtype=torch.long).cuda() * indices[0]
-        # xt = self.q_sample(zero, my_t, noise)
-
-        # 初始化噪声方式2
-        # if 'diffmae_stage2' in self.modeltype:
-        if self.modeltype in ['diffmae_stage2_2', 'semboost']:
+        if self.modeltype == 'semboost':
             noise = torch.randn((B,196,263)).cuda()
-        elif self.modeltype in ['diffmae_root67', 'omni67'] :
+        elif self.modeltype in 'omni67':
             noise = torch.randn((B,196,67)).cuda()
 
-        # 对gt_ric加噪得到xt  做测试用
-        # gt_ric = model_kwargs['gt_motion'][..., :67]
-        # my_t = torch.ones([B], dtype=torch.long).cuda() * indices[0]
-        # xt = self.q_sample(gt_ric, my_t)
-        # 纯噪声开始
         xt = noise
-        if control_once:
-            xt = torch.where(model_kwargs['traj_mask_263'], partial_emb, xt) # 消融实验用
         with torch.no_grad():
             for i in tqdm(indices): # 999 ~ 0
-                # if self.modeltype in ['diffmae_stage2_2', 'semboost'] and with_control: # 这部分已经移到和self.guide同个位置了
-                #     xt = torch.where(model_kwargs['traj_mask_263'], partial_emb, xt) # 2阶段才要做替换
-                
-                # assert torch.allclose(xt*traj_mask_263, partial_emb)
                 t = torch.tensor([i] * B).cuda() # timestep tensor
                 out = self.p_sample(xt, t, partial_emb, model_kwargs=model_kwargs) # 返回x_{t-1}和x0
-                xt = out["sample"] #上面返回的x_{t-1}
+                xt = out["sample"] # x_{t-1}
         
-        if self.modeltype in ['diffmae_stage2_2', 'semboost'] and with_control: # 最终输出还是做替换保持精度
-            out['pred_x0'] = torch.where(model_kwargs['traj_mask_263'], partial_emb, out['pred_x0']) # 2阶段才要做替换
+        if self.modeltype == 'semboost' and with_control: 
+            out['pred_x0'] = torch.where(model_kwargs['traj_mask_263'], partial_emb, out['pred_x0']) 
         return out['pred_x0']
 
     def p_sample(self, xt, t, partial_emb, model_kwargs=None):
-        '''
-        返回 x_{t-1}
+        ''' get x_{t-1}
         '''
         B = xt.shape[0]
         out = self.p_mean_variance(xt, t, model_kwargs=model_kwargs) 
 
-        if self.modeltype in ['diffmae_root67', 'omni67'] :
+        if self.modeltype == 'omni67': # Spatial Guidance
             out['mean'] = self.guide(out['mean'], t, condition=model_kwargs)
-        if self.modeltype in ['diffmae_stage2_2', 'semboost']:
-            out['mean'] = torch.where(model_kwargs['traj_mask_263'], partial_emb, out['mean']) # 跟spatial_guidance对应
+        if self.modeltype == 'semboost': # Forced Guidance
+            out['mean'] = torch.where(model_kwargs['traj_mask_263'], partial_emb, out['mean']) 
 
         mean = out['mean']   
         var = out['variance']
@@ -321,19 +261,18 @@ class GaussianDiffusionSimple:
 
         noise = torch.randn_like(xt)
         nonzero_mask = (t != 0).float().view(-1, *([1] * (len(xt.shape) - 1))) # no noise when t == 0
-        # noise是标准正态分布，sample是通过预测噪声，计算得到方差，再通过重参数化采样得到的x_{t-1}
-        sample = mean + nonzero_mask * torch.exp(0.5 * log_var) * noise
+        sample = mean + nonzero_mask * torch.exp(0.5 * log_var) * noise # noise是标准正态分布，sample是通过预测噪声，计算得到方差，再通过重参数化采样得到的x_{t-1}
 
         return {"sample": sample, 
                 "pred_x0": pred_x0} # 分别是x_{t-1}和x_0
 
 
     def p_mean_variance(self, masked_xt, t, model_kwargs=None):
+        ''' get pred_x0
+        '''
         B = masked_xt.shape[0]
         assert t.shape == (B,)
-        # 网络的前向，得到预测的x0
-        # text_emb = model_kwargs['text_emb']
-        # word_emb = model_kwargs['word_emb']
+        
         traj = model_kwargs['traj']
         clip_text = model_kwargs['clip_text']
         
@@ -344,13 +283,10 @@ class GaussianDiffusionSimple:
             xt = masked_xt.permute(0,2,1)[:,:,None]
             pred_x0 = self.model(xt, t, y={'text':clip_text, 'hint': traj.flatten(2,3)})
             pred_x0 = pred_x0.squeeze(2).permute(0,2,1)
-        elif self.modeltype == 'diffmae_stage2_2':
-            pred_x0 = self.model(masked_xt, t, text_emb, word_emb) 
         elif self.modeltype == 'semboost':
             xt = masked_xt.permute(0,2,1)[:,:,None]
             scale = torch.ones(B,device=torch.device('cuda')) * 2.5 # 引导系数
             y={'text': clip_text, 'scale':scale}
-            # xt = torch.ones_like(xt, device=xt.device)*0.5  # debug用
             pred_x0 = self.model(xt, t, y=y)  # (b,196,263)
             pred_x0 = pred_x0.squeeze(2).permute(0,2,1)
         
@@ -449,7 +385,7 @@ class GaussianDiffusionSimple:
             scale = self.calc_grad_scale(mask_hint[..., :1]) # omnicontrol这里的mask输入shape是 (b,196,22,1)
             # a = torch.linspace(1, 3, steps=196).to(mask_hint.device)
             # weight = (a**1)[None, :, None]
-            scale = scale * 3
+            # scale = scale * 3
 
         for _ in range(n_guide_steps):
             loss, grad = self.gradients(x, self.mean[..., :67], self.std[..., :67], hint, mask_hint) # x和hint都是未归一化的

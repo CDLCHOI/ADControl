@@ -1,5 +1,5 @@
 from torch.utils.data import DataLoader, Dataset
-from data_loaders.humanml.motion_loaders.comp_v6_model_dataset import CompMDMGeneratedDataset, CompADCGeneratedDataset
+from data_loaders.humanml.motion_loaders.comp_v6_model_dataset import CompADCGeneratedDataset
 import numpy as np
 from torch.utils.data._utils.collate import default_collate
 
@@ -43,15 +43,13 @@ class MMGeneratedDataset(Dataset):
         motions = motions[sort_indx]
         return motions, m_lens
 
-
-
-def get_control_dataset(args, gen_loader, clip_model, diffusion_root, diffusion, mm_num_samples, mm_num_repeats, num_samples_limit):
+def get_control_dataset(args, ground_truth_loader, clip_model, diffusion_root, diffusion, mm_num_samples, mm_num_repeats, num_samples_limit):
     opt = {
         'name': 'test',  # FIXME
     }
     print('Generating %s ...' % opt['name'])
-    dataset = CompADCGeneratedDataset(args, gen_loader, clip_model, diffusion_root, diffusion, mm_num_samples, mm_num_repeats, num_samples_limit)
-    mm_dataset = MMGeneratedDataset(opt, dataset, gen_loader.dataset.w_vectorizer)
+    dataset = CompADCGeneratedDataset(args, ground_truth_loader, clip_model, diffusion_root, diffusion, mm_num_samples, mm_num_repeats, num_samples_limit)
+    mm_dataset = MMGeneratedDataset(opt, dataset, ground_truth_loader.dataset.w_vectorizer)
 
     motion_loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=collate_fn, drop_last=True, num_workers=0)
     mm_motion_loader = DataLoader(mm_dataset, batch_size=1, num_workers=1)

@@ -64,7 +64,7 @@ if __name__ == '__main__':
     raw_mean = torch.from_numpy(np.load('dataset/humanml_spatial_norm/Mean_raw.npy')).cuda()[None, None, ...].view(1,1,22,3) 
     raw_std = torch.from_numpy(np.load('dataset/humanml_spatial_norm/Std_raw.npy')).cuda()[None, None, ...].view(1,1,22,3)
 
-    ##### ---- CLIP ---- #####
+    # CLIP
     clip_model, clip_preprocess = clip.load("ViT-B/32", device=torch.device('cuda'), jit=False)  # Must set jit=False for training
     clip.model.convert_weights(clip_model)  # Actually this line is unnecessary since clip by default already on float16
     clip_model.eval()
@@ -81,25 +81,6 @@ if __name__ == '__main__':
     net_root.eval()
     net_root.cuda()
 
-    # 2阶段网络暂时与控制精度无关，暂时注释
-    # if args.modeltype == 'diffmae_stage2_2':
-    #     from models.diffmae_2 import DiffMAE2
-    #     net = DiffMAE2(dataset=args.dataset_name, args=args, num_layers_E=8, num_layers_D=0)
-
-    # diffusion = create_gaussian_diffusion_simple(args, net, args.modeltype, clip_model)
-
-    # 读取权重
-    # ckpt = torch.load(args.resume_trans, map_location='cpu')
-    # if 'module' in list(ckpt['trans'].keys())[0]:
-    #     new_ckpt = {}
-    #     for k, v in ckpt['trans'].items():
-    #         new_k = k.replace('module.', '') if 'module' in k else k
-    #         new_ckpt[new_k] = v
-    #     net.load_state_dict(new_ckpt, strict=True)
-    # else:
-    #     net.load_state_dict(ckpt['trans'], strict=True)
-    # net.eval()
-    # net.cuda()
 
     eval_batch = 128
     test_loader = dataset_control.DataLoader(batch_size=eval_batch, args=args, mode='eval', split='test', shuffle=False, num_workers=0, drop_last=True)
